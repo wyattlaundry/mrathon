@@ -2,9 +2,12 @@ import numpy as np
 
 from ..io.main import JSONModel
 
+
+from abc import ABC, abstractproperty
+
 class VFModel(JSONModel):
     '''
-    A data-structure to hold VF model parameters from a VF.json file.
+    A data-structure to hold VF model parameters from a VF function model.
     '''
 
     def __init__(self, order, d, poles, residues) -> None:
@@ -25,6 +28,25 @@ class VFModel(JSONModel):
     
     def __repr__(self) -> str:
         return self.__str__()
+    
+    def laplace(self, s):
+        '''
+        Evaluates VF model in laplace domain, given input vector s (complex)
+        '''
+
+        result = np.zeros((len(s), self.residues[0].shape))
+
+        for pole, R in zip(self.poles, self.residues):
+            result += R / (s - pole)
+      
+        PSI, R = self.psi(s), self.R.reshape((-1, self.fdim), order='F')
+
+        # Evaluate Function NOTE we do not need denominator if converged, as it should be 1.
+        fhat  = PSI@R + self.G 
+
+        # Check if it is a matrix and reshape
+        if self.ismatrix:
+            fhat = fhat.reshape((-1, *self.nomShape), order='F')
     
     def asdict(self):
 
@@ -82,8 +104,23 @@ class VFModel(JSONModel):
         return VFModel(order, d, q, residues)
 
 
+class DeviceModel(ABC):
 
-class FDLineModel(JSONModel):
+    @property
+    @abstractproperty
+    def shuntmodel(self):
+        pass
+
+    @property
+    @abstractproperty
+    def numconductors(self):
+        pass
+
+
+class FDLineModel(JSONModel, DeviceModel):
+    '''
+    Data Structure of FD Line holding VF Admittance and Propagation Functions, as well as other line information
+    '''
 
     def __init__(self, ell:int, ncond: int, H:VFModel, Yc: VFModel) -> None:
         self.ell = ell 
@@ -98,8 +135,15 @@ class FDLineModel(JSONModel):
     
     def __repr__(self) -> str:
         return self.__str__()
-
     
+    @property
+    def shuntmodel(self):
+        return self.Yc
+
+    @property
+    def numconductors(self):
+        return self.ncond
+
     def asdict(self):
 
         Hdict = VFModel.asdict(self.H)

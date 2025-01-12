@@ -65,7 +65,7 @@ class LineParameters:
         Description:
             Evaluates analytical Characteristic Admittance model over log interval
         Returns:
-            Tuple of (Complex frequencies, samples) with evaluations
+            Tuple -> (s-domain, func-samples) with nsamp values
         '''
 
         return self.__sample(loglim, nsamp, self.Yc)
@@ -73,8 +73,8 @@ class LineParameters:
     def sample_H(self, loglim=(-1, 2), nsamp=100):
         '''
         Description:
-            Evaluates analytical Propagation model over log interval, given a line length
+            Evaluates analytical Propagation model over log interval
         Returns:
-            Tuple of (Complex frequencies, samples) with evaluations
+            Tuple -> (s-domain, func-samples) with nsamp values
         '''
         return self.__sample(loglim, nsamp, self.H)
