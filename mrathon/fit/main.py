@@ -13,7 +13,7 @@ class VFFactory:
     and used in a simulation.
     '''
 
-    def __init__(self, s: np.ndarray, finput: np.ndarray, numpoles=5) -> None:
+    def __init__(self, s: np.ndarray, finput: np.ndarray, numpoles=5, tau=0) -> None:
 
         dim = len(finput.shape)
 
@@ -35,8 +35,9 @@ class VFFactory:
 
 
         # Function Information
-        self.s = s        # Vector of Domain Values
-        self.f = f        # Function Samples Over Domain 
+        self.s   = s        # Vector of Domain Values
+        self.f   = f        # Function Samples Over Domain 
+        self.tau = tau     # Time Domain Delay Causaility
 
         self.fdim     = f.shape[1] # Dimension of Vector Function
         self.numsamp  = s.shape[0] # Number of samples in Function
@@ -228,8 +229,9 @@ class VFFactory:
         d        = self.G[0].item()
         q        = self.poles[:,0]
         residues = self.residues()
+        tau      = self.tau
 
-        return VFModel(order, d, q, residues)
+        return VFModel(order, d, q, residues, tau)
 
 
 

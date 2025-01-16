@@ -1,3 +1,3 @@
 
 
-from .conv import Convolve, ConvolveAC, SimNode, SimGraph
+from .conv import Convolve, ConvolveAC, SimNode, SimGraph, SimDevice

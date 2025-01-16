@@ -10,10 +10,11 @@ class VFModel(JSONModel):
     A data-structure to hold VF model parameters from a VF function model.
     '''
 
-    def __init__(self, order, d, poles, residues) -> None:
+    def __init__(self, order, d, poles, residues, tau=0) -> None:
         
         # Model Order/Pole Count
         self.order = order 
+        self.tau   = tau
 
         # VF Parameters: Offset, Array of Poles, Tensor of Residues
         self.d: complex = d 
@@ -50,13 +51,11 @@ class VFModel(JSONModel):
     
     def asdict(self):
 
-        #order    = data.numpoles
-        #q        = data.poles
-        #residues = data.residues()[0]
-        Rdim     = [*self.residues[0].shape]
+        Rdim     = self.residues[0].shape
 
         dictdata = {
-            "order"      : self.order ,
+            "order"    : self.order ,
+            "tau"      : self.tau   , # Time delay
             "residue-dim": [*Rdim],
             "d"     : {
                 "real": self.d.real, 
@@ -85,6 +84,7 @@ class VFModel(JSONModel):
         # Meta Parameters
         order = data['order']
         Rdim  = data['residue-dim']
+        tau   = data['tau']
 
         # VF Offset 
         d = tocmplx(data['d'])
@@ -101,23 +101,11 @@ class VFModel(JSONModel):
             residues[i]  = np.array(Rreal) + 1j*np.array(Rimag)
 
         # Return Model Object
-        return VFModel(order, d, q, residues)
+        return VFModel(order, d, q, residues, tau)
 
 
-class DeviceModel(ABC):
 
-    @property
-    @abstractproperty
-    def shuntmodel(self):
-        pass
-
-    @property
-    @abstractproperty
-    def numconductors(self):
-        pass
-
-
-class FDLineModel(JSONModel, DeviceModel):
+class FDLineModel(JSONModel):
     '''
     Data Structure of FD Line holding VF Admittance and Propagation Functions, as well as other line information
     '''
@@ -136,13 +124,6 @@ class FDLineModel(JSONModel, DeviceModel):
     def __repr__(self) -> str:
         return self.__str__()
     
-    @property
-    def shuntmodel(self):
-        return self.Yc
-
-    @property
-    def numconductors(self):
-        return self.ncond
 
     def asdict(self):
 
