@@ -13,11 +13,14 @@ class VFFactory:
     and used in a simulation.
     '''
 
-    def __init__(self, s: np.ndarray, finput: np.ndarray, numpoles=5, tau=0) -> None:
+    def __init__(self, s: np.ndarray, finput: np.ndarray, numpoles=5, tau=0, include_const=True) -> None:
 
         dim = len(finput.shape)
 
         self.ismatrix = dim==3
+
+        # Determines if the +d is in model
+        self.include_const = include_const
 
         # Vector Detected 
         if dim == 2:
@@ -49,7 +52,7 @@ class VFFactory:
         self.fD    = f.flatten('F').reshape(-1, 1)
 
         # Dummy Variables without Iterations
-        self.G, self.R = 1, np.ones((self.numpoles*self.fdim, 1)) # Offset and Numer Res
+        self.G, self.R = 0, np.ones((self.numpoles*self.fdim, 1)) # Offset and Numer Res
         self.Rh = np.ones((self.numpoles, 1)) # Denom Res (Averaged after LS solved)
  
         # Initialiation Routines
@@ -63,7 +66,8 @@ class VFFactory:
         PSI, R = self.psi(s), self.R.reshape((-1, self.fdim), order='F')
 
         # Evaluate Function NOTE we do not need denominator if converged, as it should be 1.
-        fhat  = PSI@R + self.G 
+        d = self.G if self.include_const else 0
+        fhat  = PSI@R + d
 
         # Check if it is a matrix and reshape
         if self.ismatrix:
@@ -137,7 +141,10 @@ class VFFactory:
         A_DIM = np.vstack([np.diag(v)@PSI for v in f.T])
 
         # Total Matrix
-        return np.hstack([-A_DIM , PSI_DIM, self.ONE_G])
+        if self.include_const:
+            return np.hstack([-A_DIM , PSI_DIM, self.ONE_G])
+        else:
+            return np.hstack([-A_DIM , PSI_DIM])
     
     def update_residues(self):
         '''
@@ -160,10 +167,14 @@ class VFFactory:
 
         # Extract Numer & Denominator 
         Rh = xhat[:self.numpoles]
-        R  = xhat[-self.numpoles*self.fdim-1:-1] # Pole Residues
-        G  = xhat[-1].T        # Constant Numerator Offset
 
-        self.Rh, self.R, self.G = Rh, R, G
+        if self.include_const:
+            R  = xhat[-self.numpoles*self.fdim-1:-1] # Pole Residues
+            G  = xhat[-1].T        # Constant Numerator Offset
+            self.Rh, self.R, self.G = Rh, R, G
+        else:
+            R  = xhat[-self.numpoles*self.fdim:] # Pole Residues
+            self.Rh, self.R, self.G = Rh, R, 0
 
     def denom_roots(self):
         '''
@@ -226,7 +237,7 @@ class VFFactory:
     def asmodel(self):
 
         order    = self.numpoles
-        d        = self.G[0].item()
+        d        = self.G[0].item() if self.include_const else 0
         q        = self.poles[:,0]
         residues = self.residues()
         tau      = self.tau

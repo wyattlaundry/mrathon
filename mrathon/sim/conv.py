@@ -11,6 +11,12 @@ def completelap(n):
     return (n*np.eye(n)-1)/(n-1)
 
 
+
+
+
+
+
+
 class Simulator(ABC):
     '''Simulator Objects must have a method to set dt, as it may change and a universal application is ideal.'''
 
@@ -28,7 +34,7 @@ class Convolve(Simulator):
 
         # Get all recursive funcs
         if dt is not None:
-            self.set_dt(dt)
+            self.set_dt(dt, None)
         
         # State Var Vector (ndim x npoles)
         shape = (model.residues.shape[-1], model.order)
@@ -73,19 +79,17 @@ class ConvolveAC(Convolve):
     '''
     'AC' Convolution Variation - discludes the DC impulse
     '''
-
     def next(self, uprev):
         self.x = (self.x.T*self.alpha).T + uprev
         return sum(ci@xi for ci, xi in  zip(self.C, self.x))
     
-
 class SimDevice(Simulator):
 
-    def __init__(self, vfunc, nphases=3) -> None:
+    def __init__(self, vfunc, rth=1e-4, nphases=3) -> None:
 
         self.vfunc = vfunc
         self.nphases = nphases
-
+        self.G = 1/rth
 
     def set_dt(self, dt, niter):
         '''
@@ -100,10 +104,19 @@ class SimDevice(Simulator):
         self.V = np.zeros((niter, self.nphases), dtype=complex)
         self.INJ = np.zeros((niter, self.nphases), dtype=complex)
 
-    def step(self, n):
+        # 'Into' gen/device
+        self.Ir = np.zeros((niter, 3), dtype=complex)
 
-        self.V[n] = self.vfunc(n, self.dt)
+    def injection(self, n):
+        '''
+        Description:
+            Calls user-defined function to determine this iteration's nodal voltage and current injection
+        '''
 
+        Vint = self.vfunc(n, self.dt).astype(complex)
+
+        # In steady state equivilent to G*delta V
+        return self.G*Vint
 
 class SimLine(Simulator):
 
@@ -112,20 +125,43 @@ class SimLine(Simulator):
         self.nphases = nphases
 
         # Convolution Models
-        self.Yconv = Convolve(self.fdline.Yc)
-        self.Hconv = ConvolveAC(self.fdline.H)
+        self.Yconvs = [
+            ConvolveAC(mode)
+            for mode in self.fdline.Yc
+        ]
+
+        # NOTE the -2H might come from the AC convolution variation
+        # similar to how G is used in Yc conv
+        self.Hconvs = [
+            ConvolveAC(mode) # Convolve(mode)
+            for mode in self.fdline.H
+        ]
+        #self.Yconv = ConvolveAC(self.fdline.Yc)
+        #self.Hconv = Convolve(self.fdline.H)
 
     def set_dt(self, dt, niter):
 
         # Integer delay based on dt
-        self.tau = int(self.fdline.H.tau/dt)
+        #self.tau = int(self.fdline.H.tau/dt)
+
+        self.taus = [
+           int(mode.tau/dt)
+            for mode in self.fdline.H
+        ]
         
-        # Configure Convolution Models
-        self.Yconv.set_dt(dt, niter)
-        self.Hconv.set_dt(dt, niter)
+        # Configure Convolution Models for each mode
+        for mode in self.Yconvs:
+            mode.set_dt(dt, niter)
+        for mode in self.Hconvs:
+            mode.set_dt(dt, niter)
+        #self.Yconv.set_dt(dt, niter)
+        #self.Hconv.set_dt(dt, niter)
 
         # Clear Reflected Current History
         self.Ir = np.zeros((niter, self.nphases), dtype=complex)
+
+        self.IFAR = np.zeros( self.nphases, dtype=complex)
+        self.ISHNT = np.zeros( self.nphases, dtype=complex)
 
     def set_dual(self, dual):
         '''
@@ -134,16 +170,42 @@ class SimLine(Simulator):
         '''
         self.dual: Self = dual 
 
-    def injection(self, n, v, vprev):
+    def injection(self, n, vprev):
         '''
         Description:
             Returns the injection into the node at iteration n
         '''
-        # Get far end current
-        i = self.dual.Ir[n-self.tau-1]
+        
+        # Reset far current calculation
+        self.IFAR[:]  = 0
+        self.ISHNT[:] = 0
 
+        # Propagated Far Current Modes
+        for Hmode, tau in zip(self.Hconvs, self.taus):
+
+            # Get delayed current n, n-1
+            #i     = self.dual.Ir[n-tau]
+            iprev = self.dual.Ir[n-tau-1]
+  
+            # Add contribution to incidenct
+            # NOTE MUST be AC! no immediate impulse to H
+            self.IFAR  += Hmode.next(iprev)
+
+        # Shunt current modes (typically just 1)
+        for Ymode in self.Yconvs:
+
+            # Add contribution to shunt current
+            self.ISHNT  += Ymode.next(vprev)
+
+        # NOTE Do I need to do reflections in the modal domain?
+        # I don't think so 
+        #i     = self.dual.Ir[n-self.tau]
+        #iprev = self.dual.Ir[n-self.tau-1]
         # Calculate injection current
-        return self.Yconv.next(v, vprev) - self.Hconv.next(i)
+        #self.IFAR  = self.Hconv.next(i, iprev) 
+        #self.ISHNT = self.Yconv.next(vprev)
+        
+        return  self.ISHNT  - self.IFAR
 
 class SimNode(Simulator):
     '''
@@ -171,22 +233,41 @@ class SimNode(Simulator):
             Set the timestep (dt) and update any dependent parameters
         '''
 
-       # Finalize Parameters
-        self.nlines    = len(self.lines)
-
+        # Save Args
         self.dt = dt
         self.niter = niter 
 
-        # LAplacian is the number of Lines + 1 for device
-        self.LAP = completelap(self.nlines+1)
+        # Finalize Parameters
+        self.nlines = len(self.lines)
 
-        # Set dt for devices on node
-        for line in self.lines:
-            line.set_dt(dt, niter)
-
+         # Voltage values storage
+        self.V = np.zeros((niter, 3), dtype=complex)
+        
         # Set dt for device
         self.device.set_dt(dt, niter)
 
+        # Set dt for devices on node and Construct G Matrix
+        I = np.eye(3, dtype=complex)
+        G = I*self.device.G
+        for line in self.lines:
+            line.set_dt(dt, niter)
+
+            for mode in line.Yconvs:
+                G += mode.G 
+
+        # Constructing KCL
+        #O = np.ones((1,self.nlines))
+        #CONV = bmat([
+        #    [O   , None, None , -G[0]],
+        #    [None, O   , None , -G[1]],
+        #    [None, None, O    , -G[2]],
+        #]).toarray()
+        #self.CONV = pinv(CONV)
+
+        # This is the reduced form of the above
+        self.N = self.nlines # number of 'reflected' current branches
+        self.G = G
+        self.Gchrg = -np.linalg.inv(G.T@G + self.N*I)@G.T
 
     def step(self, n):
         '''
@@ -194,22 +275,17 @@ class SimNode(Simulator):
             Calculate the history current of the next iteration
         '''
 
-        # Calculates Voltage
-        self.device.step(n)
-        v, vprev = self.device.V[n], self.device.V[n-1]
-
         # Calculate Injection of lines and the governing device
-        Iinj = [
-            *(line.injection(n, v, vprev) for line in self.lines),
-            self.device.INJ[n]
-        ]
+        INJ = self.device.injection(n)
+        for line in self.lines:
+            INJ += line.injection(n, self.V[n-1])
 
-        # Calculate reflected current
-        Ir = self.LAP@np.vstack(Iinj) # (lines x phase)
+        self.V[n] = self.Gchrg@INJ
+        Iforw = (INJ + self.G@self.V[n])/self.N
 
-        # Set the reflection values for each line 
-        for line, refl in zip(self.lines, Ir[::-1]):
-            line.Ir[n] = refl
+        for line in self.lines:
+            line.Ir[n] = Iforw - line.IFAR
+        
 
 class SimGraph(Simulator):
     '''
@@ -224,7 +300,6 @@ class SimGraph(Simulator):
 
         self.n = 0
 
-
     def set_dt(self, dt, niter):
         '''
         Description:
@@ -235,9 +310,12 @@ class SimGraph(Simulator):
 
         for node in self.nodes:
             node.set_dt(dt, niter)
-
-        
+    
     def connect(self, nodeA: SimNode, nodeB: SimNode, line):
+        '''
+        Description:
+            Terminates line model on two provided nodes in the model
+        '''
 
         lineA = SimLine(line, nphases=nodeA.nphases)
         lineB = SimLine(line, nphases=nodeB.nphases)
@@ -251,6 +329,10 @@ class SimGraph(Simulator):
         nodeB.add_line(lineB)
 
     def step(self):
+        '''
+        Description:
+            Execute simulation timestep for all graph nodes
+        '''
 
         # Need an incidence map
         for node in self.nodes:
@@ -260,6 +342,10 @@ class SimGraph(Simulator):
         self.n += 1
 
     def restart(self):
+        '''
+        Description:
+            Clears simulation history to prepare for new simulation of model.
+        '''
 
         # Clears arrays and resets counters etc.
         self.set_dt(self.dt, self.niter)

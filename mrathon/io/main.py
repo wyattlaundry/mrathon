@@ -3,7 +3,8 @@
 
 from abc import ABC, abstractmethod
 import json
-
+from typing import Type, TypeVar
+T = TypeVar('T', bound='JSONModel')
 
 class JSONModel(ABC):
 
@@ -16,7 +17,7 @@ class JSONModel(ABC):
         pass
 
     @classmethod
-    def read(cls, fname: str):
+    def read(cls: Type[T], fname: str) -> T:
         '''Crates object from JSON structure in file'''
         with open(fname, 'r') as file:
             data = json.load(file)

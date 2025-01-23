@@ -3,12 +3,49 @@ from typing import Any
 import numpy as np
 from numpy import pi
 
+from mrathon.parameters.geometry import LineGeometry
+
+# Constants Used
+mu0 = 4*pi*1e-7 # H/m
+eps0 = 8.8541878188e-12 # F/m
+L = mu0/(2*pi)
+
+
+
+class ExternalImpedence:
+    '''Carson Equations Impedences (Inductive Only!)'''
+
+    def __init__(self, LG: LineGeometry) -> None:
+
+        self.D = LG.D
+
+        # Element wise recipricol (1/D)
+        self.rD = np.reciprocal(self.D)
+
+    def __call__(self, *args: Any, **kwds: Any) -> Any:
+        ''' 
+        Description:
+            Returns the Per-Meter Impedence Using Bessel Functions
+        '''
+
+        # Scalar Freq argument
+        w = args[0]
+
+        # Mutual Impedence Calculation
+        return 1j*w*L*np.log(self.rD)
+
 class ShuntAdmittance:
 
-    def __init__(self, G, C) -> None:
+    def __init__(self, LG: LineGeometry, G=0) -> None:
         
-        self.G = G
-        self.C = C
+        # Diaganol element shunt conductance
+        self.G = G*np.eye(3)
+
+        # Calculate Capacitance from Line Geometry
+        D, Dp = LG.D, LG.Dp
+        Cinv = np.log(Dp/D)/(2*pi)
+
+        self.C = eps0*np.linalg.inv(Cinv)
 
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         
@@ -17,27 +54,20 @@ class ShuntAdmittance:
         return self.G + 1j*w*self.C
 
 
-class SeriesImpedance:
+class InternalImpedence:
 
-    # Permeability  and Permittivity
-    mu0 = 1.256637e-6 # Netwonts per (Amp squared)
-    eps0 = 8.854187e-12 # Farads per Meter
 
     mu = 1 *mu0
     eps = 1 * eps0
 
-    def __init__(self, resistivity, radius_external, Lext) -> None:
+    def __init__(self, LG: LineGeometry, resistivity)-> None:
         
-
         # Resistivity and Conductivity
         self.rho = resistivity
         self.sig = 1/resistivity
 
-        # External Inductance
-        self.Lext = Lext
-
         # Radius
-        self.rade = radius_external
+        self.rade = LG.crad
 
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         ''' 
@@ -52,7 +82,7 @@ class SeriesImpedance:
         for k in range(1, 2000):
             Y += self.Yk(w, k)
 
-        Z = 1/Y + 1j*w*self.Lext
+        Z = 1/Y 
 
         return Z
 

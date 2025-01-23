@@ -78,3 +78,12 @@ class LineParameters:
             Tuple -> (s-domain, func-samples) with nsamp values
         '''
         return self.__sample(loglim, nsamp, self.H)
+    
+    def sample_gamma(self, loglim=(-1, 2), nsamp=100):
+        '''
+        Description:
+            Evaluates analytical Propagation model over log interval
+        Returns:
+            Tuple -> (s-domain, func-samples) with nsamp values
+        '''
+        return self.__sample(loglim, nsamp, self.gamma)
