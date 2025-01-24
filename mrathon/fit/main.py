@@ -1,7 +1,7 @@
 
 from typing import Any
 import numpy as np
-from scipy.linalg import block_diag
+from scipy.linalg import block_diag, pinv
 from numpy.linalg import eigvals
 
 from ..data.models import VFModel
@@ -47,12 +47,18 @@ class VFFactory:
         self.numpoles = numpoles # Number of Poles
 
         # Utility Vectors
-        self.ONE_G = np.ones((self.numsamp*self.fdim,1))  # Used in A_matrix 
+        #self.ONE_G = np.ones((self.numsamp*self.fdim, self.fdim))  # Used in A_matrix 
+        #self.ONE_G = np.ones((self.numsamp*self.fdim,0))  # Used in A_matrix 
+        self.ONE_G = np.repeat(np.eye(self.fdim), self.numsamp, axis=0)#.reshape(-1, 1, order='F')
+        
         self.ONE_Q = np.ones((self.numpoles,1)) # Used In newpoles function
         self.fD    = f.flatten('F').reshape(-1, 1)
 
         # Dummy Variables without Iterations
-        self.G, self.R = 0, np.ones((self.numpoles*self.fdim, 1)) # Offset and Numer Res
+        
+        self.d = np.zeros((self.fdim,1))
+        #self.d = 0 
+        self.R = np.ones((self.numpoles*self.fdim, 1)) # Offset and Numer Res
         self.Rh = np.ones((self.numpoles, 1)) # Denom Res (Averaged after LS solved)
  
         # Initialiation Routines
@@ -66,7 +72,7 @@ class VFFactory:
         PSI, R = self.psi(s), self.R.reshape((-1, self.fdim), order='F')
 
         # Evaluate Function NOTE we do not need denominator if converged, as it should be 1.
-        d = self.G if self.include_const else 0
+        d = self.d if self.include_const else 0
         fhat  = PSI@R + d
 
         # Check if it is a matrix and reshape
@@ -107,7 +113,8 @@ class VFFactory:
     
     def __psuedo_inv(self, A):
         '''Convience Function for Pusedo Inverse'''
-        return np.linalg.inv(self.__H(A)@A)@self.__H(A)
+        return pinv(A)
+        #return np.linalg.inv(self.__H(A)@A)@self.__H(A)
 
     def psi(self, s=None):
         '''
@@ -169,12 +176,12 @@ class VFFactory:
         Rh = xhat[:self.numpoles]
 
         if self.include_const:
-            R  = xhat[-self.numpoles*self.fdim-1:-1] # Pole Residues
-            G  = xhat[-1].T        # Constant Numerator Offset
-            self.Rh, self.R, self.G = Rh, R, G
+            R  = xhat[-self.numpoles*self.fdim-self.fdim:-self.fdim] # Pole Residues
+            d  = xhat[-self.fdim:].T        # Constant Numerator Offset
+            self.Rh, self.R, self.d = Rh, R, d
         else:
             R  = xhat[-self.numpoles*self.fdim:] # Pole Residues
-            self.Rh, self.R, self.G = Rh, R, 0
+            self.Rh, self.R, self.d = Rh, R, 0
 
     def denom_roots(self):
         '''
@@ -234,10 +241,24 @@ class VFFactory:
         '''
         return self.R.reshape((-1, *self.nomShape), order='F')
     
+    def offset(self):
+        ''' 
+        Description:
+            Returns offset (d) of the model
+        Returns:
+            N x M matrix,  NxM input
+        '''
+        if self.include_const:
+            return self.d.reshape(self.nomShape, order='F')
+        else:
+            return np.zeros(self.nomShape)
+
+    
     def asmodel(self):
 
         order    = self.numpoles
-        d        = self.G[0].item() if self.include_const else 0
+        #d        = self.d[0].item() if self.include_const else 0
+        d        = self.offset()
         q        = self.poles[:,0]
         residues = self.residues()
         tau      = self.tau

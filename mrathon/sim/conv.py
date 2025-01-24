@@ -11,12 +11,6 @@ def completelap(n):
     return (n*np.eye(n)-1)/(n-1)
 
 
-
-
-
-
-
-
 class Simulator(ABC):
     '''Simulator Objects must have a method to set dt, as it may change and a universal application is ideal.'''
 
@@ -119,6 +113,12 @@ class SimDevice(Simulator):
         return self.G*Vint
 
 class SimLine(Simulator):
+    '''
+    Numerical Implementation of F.D. Line Model. 
+    Two instanaces are formed of this object and are linked 
+    to exchange propagation history. Each dual instance is then assigned
+    to a seperate SimNode instance.
+    '''
 
     def __init__(self, fdline: FDLineModel, nphases) -> None:
         self.fdline = fdline
@@ -249,9 +249,14 @@ class SimNode(Simulator):
         # Set dt for devices on node and Construct G Matrix
         I = np.eye(3, dtype=complex)
         G = I*self.device.G
+
+        # Net Conductance of Lines
         for line in self.lines:
+
+            # Configure
             line.set_dt(dt, niter)
 
+            # Sum Each mode conductance for the line
             for mode in line.Yconvs:
                 G += mode.G 
 
@@ -267,6 +272,8 @@ class SimNode(Simulator):
         # This is the reduced form of the above
         self.N = self.nlines # number of 'reflected' current branches
         self.G = G
+        # NOTE sign?
+        #self.Gchrg = -np.linalg.inv(G.T@G + self.N*I)@G.T
         self.Gchrg = -np.linalg.inv(G.T@G + self.N*I)@G.T
 
     def step(self, n):
@@ -280,16 +287,20 @@ class SimNode(Simulator):
         for line in self.lines:
             INJ += line.injection(n, self.V[n-1])
 
+        # Solve for node V at this time step
         self.V[n] = self.Gchrg@INJ
+
+        # Solve the net injection out of the node
         Iforw = (INJ + self.G@self.V[n])/self.N
 
+        # Calculate reflected current for each line
         for line in self.lines:
             line.Ir[n] = Iforw - line.IFAR
         
 
 class SimGraph(Simulator):
     '''
-    Manages many nodes during the simulation, handling propagation and branch oversight.
+    Manages network nodes during the simulation, handling iteration control and network connections.
     '''
 
     def __init__(self, nodes: list[SimNode]) -> None:
@@ -314,7 +325,7 @@ class SimGraph(Simulator):
     def connect(self, nodeA: SimNode, nodeB: SimNode, line):
         '''
         Description:
-            Terminates line model on two provided nodes in the model
+            Terminates F.D. line model between two provided nodes for simulation.
         '''
 
         lineA = SimLine(line, nphases=nodeA.nphases)

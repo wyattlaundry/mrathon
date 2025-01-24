@@ -17,7 +17,7 @@ class VFModel(JSONModel):
         self.tau: float   = tau
 
         # VF Parameters: Offset, Array of Poles, Tensor of Residues
-        self.d: complex = d 
+        self.d: np.ndarray = d 
         self.poles: np.ndarray = poles 
         self.residues: np.ndarray = residues
 
@@ -53,7 +53,7 @@ class VFModel(JSONModel):
         
         # Psi matrix and flattenede residues and offset constant
         PSI, R = self.psi(s), self.residues.reshape((-1, self.rsize), order='F')
-        d = self.d
+        d = self.d.flatten(order='F')
 
         # Evaluate Function NOTE we do not need denominator if converged, as it should be 1.
         fhat  = PSI@R + d
@@ -71,8 +71,8 @@ class VFModel(JSONModel):
             "tau"      : self.tau   , # Time delay
             "residue-dim": [*Rdim],
             "d"     : {
-                "real": self.d.real, 
-                "imag": self.d.imag
+                "real": [row.real.tolist() for row in self.d],  #self.d.real
+                "imag": [row.imag.tolist() for row in self.d]
             },
             
             "poles" : [
@@ -127,7 +127,8 @@ class VFModel(JSONModel):
         tau   = data['tau']
 
         # VF Offset 
-        d = tocmplx(data['d'])
+        dreal, dimag = data['d']['real'], data['d']['imag']
+        d = np.array(dreal) + 1j*np.array(dimag)
 
         # Vector of poles
         q        = np.empty(order   , dtype=complex)
