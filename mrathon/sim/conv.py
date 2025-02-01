@@ -121,10 +121,10 @@ class SimLine(Simulator):
     '''
 
     def __init__(self, fdline: FDLineModel, nphases) -> None:
-        self.fdline = fdline
+        self.fdline  = fdline
         self.nphases = nphases
 
-        # Convolution Models
+        # AC Convolve Used because 'G' term used explicitly in main voltage solve
         self.Yconvs = [
             ConvolveAC(mode)
             for mode in self.fdline.Yc
@@ -133,19 +133,21 @@ class SimLine(Simulator):
         # NOTE the -2H might come from the AC convolution variation
         # similar to how G is used in Yc conv
         self.Hconvs = [
-            ConvolveAC(mode) # Convolve(mode)
+            Convolve(mode)
             for mode in self.fdline.H
         ]
-        #self.Yconv = ConvolveAC(self.fdline.Yc)
-        #self.Hconv = Convolve(self.fdline.H)
 
     def set_dt(self, dt, niter):
 
         # Integer delay based on dt
-        #self.tau = int(self.fdline.H.tau/dt)
-
-        self.taus = [
+        self.inttaus = [
            int(mode.tau/dt)
+            for mode in self.fdline.H
+        ]
+
+        # Fractional non-integer component of delay (float between 0 and 1)
+        self.epsilons = [
+            (mode.tau%dt)/dt
             for mode in self.fdline.H
         ]
         
@@ -154,14 +156,13 @@ class SimLine(Simulator):
             mode.set_dt(dt, niter)
         for mode in self.Hconvs:
             mode.set_dt(dt, niter)
-        #self.Yconv.set_dt(dt, niter)
-        #self.Hconv.set_dt(dt, niter)
 
         # Clear Reflected Current History
         self.Ir = np.zeros((niter, self.nphases), dtype=complex)
 
-        self.IFAR = np.zeros( self.nphases, dtype=complex)
-        self.ISHNT = np.zeros( self.nphases, dtype=complex)
+        # Store iteration propagated incident and shunt current
+        self.IINCIDENT  = np.zeros( self.nphases, dtype=complex)
+        self.ISHUNT = np.zeros( self.nphases, dtype=complex)
 
     def set_dual(self, dual):
         '''
@@ -170,42 +171,39 @@ class SimLine(Simulator):
         '''
         self.dual: Self = dual 
 
-    def injection(self, n, vprev):
+    def historical(self, n, vprev):
         '''
         Description:
-            Returns the injection into the node at iteration n
+            Returns the injection into the node at iteration (n)
+            Calculating (Ishunt - Ifar)
         '''
         
         # Reset far current calculation
-        self.IFAR[:]  = 0
-        self.ISHNT[:] = 0
+        self.IINCIDENT[:]  = 0
+        self.ISHUNT[:]     = 0
 
         # Propagated Far Current Modes
-        for Hmode, tau in zip(self.Hconvs, self.taus):
+        for Hmode, tau, eps in zip(self.Hconvs, self.inttaus, self.epsilons):
 
-            # Get delayed current n, n-1
-            #i     = self.dual.Ir[n-tau]
-            iprev = self.dual.Ir[n-tau-1]
-  
-            # Add contribution to incidenct
-            # NOTE MUST be AC! no immediate impulse to H
-            self.IFAR  += Hmode.next(iprev)
+            # Get values for interpolation
+            im0 = self.dual.Ir[n-tau] 
+            im1 = self.dual.Ir[n-tau-1]
+            im2 = self.dual.Ir[n-tau-2]
+            
+            # Interpolated values
+            i     = im0 - (im0 - im1)*eps
+            iprev = im1 - (im1 - im2)*eps
+
+            # Add contribution to incidenct using interpolated
+            self.IINCIDENT  += Hmode.next(i, iprev)
 
         # Shunt current modes (typically just 1)
         for Ymode in self.Yconvs:
 
             # Add contribution to shunt current
-            self.ISHNT  += Ymode.next(vprev)
-
-        # NOTE Do I need to do reflections in the modal domain?
-        # I don't think so 
-        #i     = self.dual.Ir[n-self.tau]
-        #iprev = self.dual.Ir[n-self.tau-1]
-        # Calculate injection current
-        #self.IFAR  = self.Hconv.next(i, iprev) 
-        #self.ISHNT = self.Yconv.next(vprev)
+            self.ISHUNT  += Ymode.next(vprev)
         
-        return  self.ISHNT  - self.IFAR
+        return  self.IINCIDENT - self.ISHUNT 
 
 class SimNode(Simulator):
     '''
@@ -272,9 +270,9 @@ class SimNode(Simulator):
         # This is the reduced form of the above
         self.N = self.nlines # number of 'reflected' current branches
         self.G = G
+
         # NOTE sign?
-        #self.Gchrg = -np.linalg.inv(G.T@G + self.N*I)@G.T
-        self.Gchrg = -np.linalg.inv(G.T@G + self.N*I)@G.T
+        self.Gchrg = np.linalg.inv(G.T@G + self.N*I)@G.T
 
     def step(self, n):
         '''
@@ -283,19 +281,19 @@ class SimNode(Simulator):
         '''
 
         # Calculate Injection of lines and the governing device
-        INJ = self.device.injection(n)
+        HIST = self.device.injection(n)
         for line in self.lines:
-            INJ += line.injection(n, self.V[n-1])
+            HIST += line.historical(n, self.V[n-1])
 
         # Solve for node V at this time step
-        self.V[n] = self.Gchrg@INJ
+        self.V[n] = self.Gchrg@HIST
 
-        # Solve the net injection out of the node
-        Iforw = (INJ + self.G@self.V[n])/self.N
+        # Solve the net injection out of the node into line
+        Iinj = (HIST + self.G@self.V[n])/self.N
 
         # Calculate reflected current for each line
         for line in self.lines:
-            line.Ir[n] = Iforw - line.IFAR
+            line.Ir[n] = Iinj - line.IINCIDENT
         
 
 class SimGraph(Simulator):
